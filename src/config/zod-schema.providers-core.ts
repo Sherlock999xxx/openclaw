@@ -13,6 +13,7 @@ import {
   DmPolicySchema,
   ExecutableTokenSchema,
   GroupPolicySchema,
+  HexColorSchema,
   MarkdownConfigSchema,
   MSTeamsReplyStyleSchema,
   ProviderCommandsSchema,
@@ -257,6 +258,18 @@ export const DiscordGuildSchema = z
   })
   .strict();
 
+const DiscordUiSchema = z
+  .object({
+    components: z
+      .object({
+        accentColor: HexColorSchema.optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 export const DiscordAccountSchema = z
   .object({
     name: z.string().optional(),
@@ -317,6 +330,7 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    ui: DiscordUiSchema,
     intents: z
       .object({
         presence: z.boolean().optional(),

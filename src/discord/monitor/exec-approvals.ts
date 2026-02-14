@@ -1,6 +1,5 @@
 import {
   Button,
-  Container,
   Row,
   Separator,
   TextDisplay,
@@ -26,6 +25,7 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
+import { DiscordUiContainer } from "../ui.js";
 
 const EXEC_APPROVAL_KEY = "execapproval";
 
@@ -103,15 +103,17 @@ export function parseExecApprovalData(
 }
 
 type ExecApprovalContainerParams = {
+  cfg: OpenClawConfig;
+  accountId: string;
   title: string;
   description?: string;
   commandPreview: string;
   metadataLines?: string[];
   footer?: string;
-  accentColor: string;
+  accentColor?: string;
 };
 
-class ExecApprovalContainer extends Container {
+class ExecApprovalContainer extends DiscordUiContainer {
   constructor(params: ExecApprovalContainerParams) {
     const components: Array<TextDisplay | Separator> = [new TextDisplay(`**${params.title}**`)];
     if (params.description) {
@@ -126,7 +128,12 @@ class ExecApprovalContainer extends Container {
       components.push(new Separator({ divider: false, spacing: "small" }));
       components.push(new TextDisplay(`*${params.footer}*`));
     }
-    super(components, { accentColor: params.accentColor });
+    super({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      components,
+      accentColor: params.accentColor,
+    });
   }
 }
 
@@ -212,65 +219,85 @@ function buildExecApprovalMetadataLines(request: ExecApprovalRequest): string[] 
 }
 
 function buildExecApprovalPayload(
-  container: Container,
+  container: DiscordUiContainer,
   actionRow?: Row<Button>,
 ): MessagePayloadObject {
   const components: TopLevelComponents[] = actionRow ? [container, actionRow] : [container];
   return { components };
 }
 
-function createExecApprovalRequestContainer(request: ExecApprovalRequest): ExecApprovalContainer {
-  const commandText = request.request.command;
+function createExecApprovalRequestContainer(params: {
+  request: ExecApprovalRequest;
+  cfg: OpenClawConfig;
+  accountId: string;
+}): ExecApprovalContainer {
+  const commandText = params.request.request.command;
   const commandPreview =
     commandText.length > 1000 ? `${commandText.slice(0, 1000)}...` : commandText;
-  const expiresIn = Math.max(0, Math.round((request.expiresAtMs - Date.now()) / 1000));
+  const expiresIn = Math.max(0, Math.round((params.request.expiresAtMs - Date.now()) / 1000));
 
   return new ExecApprovalContainer({
+    cfg: params.cfg,
+    accountId: params.accountId,
     title: "Exec Approval Required",
     description: "A command needs your approval.",
     commandPreview,
-    metadataLines: buildExecApprovalMetadataLines(request),
-    footer: `Expires in ${expiresIn}s · ID: ${request.id}`,
+    metadataLines: buildExecApprovalMetadataLines(params.request),
+    footer: `Expires in ${expiresIn}s · ID: ${params.request.id}`,
     accentColor: "#FFA500",
   });
 }
 
-function createResolvedContainer(
-  request: ExecApprovalRequest,
-  decision: ExecApprovalDecision,
-  resolvedBy?: string | null,
-): ExecApprovalContainer {
-  const commandText = request.request.command;
+function createResolvedContainer(params: {
+  request: ExecApprovalRequest;
+  decision: ExecApprovalDecision;
+  resolvedBy?: string | null;
+  cfg: OpenClawConfig;
+  accountId: string;
+}): ExecApprovalContainer {
+  const commandText = params.request.request.command;
   const commandPreview = commandText.length > 500 ? `${commandText.slice(0, 500)}...` : commandText;
 
   const decisionLabel =
-    decision === "allow-once"
+    params.decision === "allow-once"
       ? "Allowed (once)"
-      : decision === "allow-always"
+      : params.decision === "allow-always"
         ? "Allowed (always)"
         : "Denied";
 
   const accentColor =
-    decision === "deny" ? "#ED4245" : decision === "allow-always" ? "#5865F2" : "#57F287";
+    params.decision === "deny"
+      ? "#ED4245"
+      : params.decision === "allow-always"
+        ? "#5865F2"
+        : "#57F287";
 
   return new ExecApprovalContainer({
+    cfg: params.cfg,
+    accountId: params.accountId,
     title: `Exec Approval: ${decisionLabel}`,
-    description: resolvedBy ? `Resolved by ${resolvedBy}` : "Resolved",
+    description: params.resolvedBy ? `Resolved by ${params.resolvedBy}` : "Resolved",
     commandPreview,
-    footer: `ID: ${request.id}`,
+    footer: `ID: ${params.request.id}`,
     accentColor,
   });
 }
 
-function createExpiredContainer(request: ExecApprovalRequest): ExecApprovalContainer {
-  const commandText = request.request.command;
+function createExpiredContainer(params: {
+  request: ExecApprovalRequest;
+  cfg: OpenClawConfig;
+  accountId: string;
+}): ExecApprovalContainer {
+  const commandText = params.request.request.command;
   const commandPreview = commandText.length > 500 ? `${commandText.slice(0, 500)}...` : commandText;
 
   return new ExecApprovalContainer({
+    cfg: params.cfg,
+    accountId: params.accountId,
     title: "Exec Approval: Expired",
     description: "This approval request has expired.",
     commandPreview,
-    footer: `ID: ${request.id}`,
+    footer: `ID: ${params.request.id}`,
     accentColor: "#99AAB5",
   });
 }
@@ -430,7 +457,11 @@ export class DiscordExecApprovalHandler {
       this.opts.cfg,
     );
 
-    const container = createExecApprovalRequestContainer(request);
+    const container = createExecApprovalRequestContainer({
+      request,
+      cfg: this.opts.cfg,
+      accountId: this.opts.accountId,
+    });
     const actionRow = new ExecApprovalActionRow(request.id);
     const payload = buildExecApprovalPayload(container, actionRow);
     const body = stripUndefinedFields(serializePayload(payload));
@@ -505,7 +536,13 @@ export class DiscordExecApprovalHandler {
 
     logDebug(`discord exec approvals: resolved ${resolved.id} with ${resolved.decision}`);
 
-    const container = createResolvedContainer(request, resolved.decision, resolved.resolvedBy);
+    const container = createResolvedContainer({
+      request,
+      decision: resolved.decision,
+      resolvedBy: resolved.resolvedBy,
+      cfg: this.opts.cfg,
+      accountId: this.opts.accountId,
+    });
     await this.finalizeMessage(pending.discordChannelId, pending.discordMessageId, container);
   }
 
@@ -526,14 +563,18 @@ export class DiscordExecApprovalHandler {
 
     logDebug(`discord exec approvals: timeout for ${approvalId}`);
 
-    const container = createExpiredContainer(request);
+    const container = createExpiredContainer({
+      request,
+      cfg: this.opts.cfg,
+      accountId: this.opts.accountId,
+    });
     await this.finalizeMessage(pending.discordChannelId, pending.discordMessageId, container);
   }
 
   private async finalizeMessage(
     channelId: string,
     messageId: string,
-    container: Container,
+    container: DiscordUiContainer,
   ): Promise<void> {
     if (!this.opts.config.cleanupAfterResolve) {
       await this.updateMessage(channelId, messageId, container);
@@ -559,7 +600,7 @@ export class DiscordExecApprovalHandler {
   private async updateMessage(
     channelId: string,
     messageId: string,
-    container: Container,
+    container: DiscordUiContainer,
   ): Promise<void> {
     try {
       const { rest, request: discordRequest } = createDiscordClient(
